@@ -3,7 +3,7 @@
 Self-service DevOps sandbox platform for HNG14 Stage 5: create short-lived isolated Docker environments, route them through Nginx, stream logs by env ID, poll health, simulate outages, recover, and destroy everything manually or by TTL.
 
 Demo video: **pending Kelechi upload**
-Live server: **pending VM deployment**
+Live server: **http://34.77.247.217:18080/readme-live/** (ingress) · **http://34.77.247.217:18081/api/v1** (control API)
 
 ## Architecture
 
@@ -83,6 +83,25 @@ make test-api
 
 The current Postman gate passes locally: 14 requests, 59 assertions, 0 failures.
 
+## Live Smoke
+
+The deployed VM is reachable at `34.77.247.217`. A real smoke env named `readme-live` is available through Nginx:
+
+```bash
+curl -fsS http://34.77.247.217:18080/health
+curl -fsS http://34.77.247.217:18080/readme-live/health
+curl -fsS http://34.77.247.217:18081/api/v1/envs
+```
+
+If the short-lived smoke env has expired, recreate the same route and test it:
+
+```bash
+curl -fsS -X POST http://34.77.247.217:18081/api/v1/envs \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"readme-live","ttl_minutes":240}'
+curl -fsS http://34.77.247.217:18080/readme-live/health
+```
+
 ## Make Targets
 
 | Target | Purpose |
@@ -155,7 +174,8 @@ After three consecutive failures, the monitor marks the env `degraded`.
 - Single-host only; no clustering or remote Docker contexts.
 - The API uses the Docker socket and runs with enough privilege to operate containers.
 - OPA policy files are present, but the API mirrors their outage rules rather than requiring an `opa` binary.
-- The demo video link and live VM URL are pending external upload/deployment.
+- The demo video link is pending external upload.
+- Sandbox environments are intentionally short-lived; recreate named live smoke routes if their TTL has expired.
 - `stress` mode uses a short Python CPU loop inside the demo container, not `stress-ng`.
 
 ## Changelog
@@ -165,3 +185,5 @@ After three consecutive failures, the monitor marks the env `degraded`.
 - `journal/2026-05-10-03-daemon-monitor.md`
 - `journal/2026-05-10-04-api-outage.md`
 - `journal/2026-05-10-05-polish-ship.md`
+- `journal/2026-05-10-06-ci-repair.md`
+- `journal/2026-05-10-07-readme-live-submission.md`
