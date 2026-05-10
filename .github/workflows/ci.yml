@@ -98,14 +98,16 @@ jobs:
   # ===========================================================================
   # 2. Build + smoke test
   # ===========================================================================
+  # Note: this job will be RED until Sprint 1 lands docker-compose.yml and the
+  # demo-app. It depends on `docker compose build` succeeding, which needs
+  # those artefacts. Tracked as a known-acceptable Sprint 0 failure.
+  # We do not gate the job at workflow level on hashFiles() because that
+  # function is only reliable inside a step that runs after `actions/checkout`;
+  # at job-level the workspace is empty and the call returns inconsistently.
   build-test:
     name: build-test
     runs-on: ubuntu-22.04
     needs: lint
-    # Skip until docker-compose.yml lands (Sprint 1). Without it
-    # `docker compose build` fails immediately, blocking the rest of the
-    # job on artefacts that do not yet exist.
-    if: hashFiles('docker-compose.yml') != ''
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -176,13 +178,13 @@ jobs:
   # ===========================================================================
   # 3. Trivy CVE scan
   # ===========================================================================
+  # Note: like build-test, this job will be RED until Sprint 1 lands
+  # docker-compose.yml. It needs a built image to scan; nothing to scan
+  # until compose can build something.
   trivy:
     name: trivy
     runs-on: ubuntu-22.04
     needs: lint
-    # Skip until docker-compose.yml lands (Sprint 1). Trivy needs a built
-    # image; without compose there is nothing to build and scan.
-    if: hashFiles('docker-compose.yml') != ''
     steps:
       - name: Checkout
         uses: actions/checkout@v4
