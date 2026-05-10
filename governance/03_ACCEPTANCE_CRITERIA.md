@@ -44,12 +44,12 @@ The matrix is sectioned by source: **Explicit** rows come straight from `CURRENT
 | A34 | Optional: mode `stress` (CPU spike) | `platform/simulate_outage.sh` | — | manual smoke if shipped | …04-outage | ☑ |
 | A35 | Guard: never simulate against Nginx or daemon | `platform/lib/state.sh::assert_app_container` | — | bats: refusal exit 2 + msg | …04-outage | ☑ |
 | A36 | Control API (Flask/FastAPI/Express) wraps the scripts | `platform/api.py` | `make up` | Postman: pre-flight | …04-outage | ☑ |
-| A37 | `POST /envs` → create env | `platform/api.py` | — | Postman: Create env | …04-outage | ☑ |
+| A37 | `POST /envs` → create env | `platform/api.py` | — | Postman: Create env | …04-outage, journal/2026-05-10-06-ci-repair | ☑ |
 | A38 | `GET /envs` → list active envs + TTL remaining | `platform/api.py` | — | Postman: List envs | …04-outage | ☑ |
-| A39 | `DELETE /envs/:id` → destroy env | `platform/api.py` | — | Postman: Destroy env | …04-outage | ☑ |
+| A39 | `DELETE /envs/:id` → destroy env | `platform/api.py` | — | Postman: Destroy env | …04-outage, journal/2026-05-10-06-ci-repair | ☑ |
 | A40 | `GET /envs/:id/logs` → last 100 lines of app.log | `platform/api.py` | — | Postman: Get logs (asserts ≤100) | …04-outage | ☑ |
 | A41 | `GET /envs/:id/health` → last 10 health check results | `platform/api.py` | — | Postman: Get health (asserts ≤10) | …04-outage | ☑ |
-| A42 | `POST /envs/:id/outage` → trigger simulation, body `{"mode":"crash"}` | `platform/api.py` | — | Postman: Trigger outage | …04-outage | ☑ |
+| A42 | `POST /envs/:id/outage` → trigger simulation, body `{"mode":"crash"}` | `platform/api.py` | — | Postman: Trigger outage | …04-outage, journal/2026-05-10-06-ci-repair | ☑ |
 | A43 | `make up` starts Nginx + daemon + API | `Makefile` | `make up` | manual smoke | …01-skeleton, …04-outage | ☑ |
 | A44 | `make down` stops everything, destroys all envs | `Makefile` | `make down` | bats: post-down repo-state clean | …05-ship | ☑ |
 | A45 | `make create` creates new env (prompts for name + TTL) | `Makefile` | `make create` | manual smoke | …02-lifecycle | ☑ |

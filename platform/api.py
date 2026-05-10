@@ -4,7 +4,9 @@ import hmac
 import json
 import os
 import re
+import secrets
 import subprocess
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,9 @@ API_LOG = LOGS_DIR / "api.log"
 ENV_ID_RE = re.compile(r"^env-[0-9a-f]{8}$")
 ENV_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$")
 ALLOWED_MODES = {"crash", "pause", "network", "recover", "stress"}
+CREATE_SYNC_SECONDS = 3.75
+DESTROY_SYNC_SECONDS = 3.75
+RECOVER_SYNC_SECONDS = 3.75
 
 app = FastAPI(title="DevOps Sandbox API", version="1.0.0")
 
@@ -83,6 +88,35 @@ def load_state(env_id: str) -> dict[str, Any] | None:
         return None
 
 
+def write_state_atomic(env_id: str, state: dict[str, Any]) -> None:
+    ENVS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = ENVS_DIR / f".tmp.{env_id}.{os.getpid()}.{secrets.token_hex(4)}"
+    payload = json.dumps(state, indent=2, sort_keys=True) + "\n"
+    try:
+        with tmp.open("w", encoding="utf-8") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, state_path(env_id))
+        dir_fd = os.open(ENVS_DIR, os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def update_state_fields(env_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    state = load_state(env_id)
+    if not state:
+        return None
+    state.update(updates)
+    write_state_atomic(env_id, state)
+    return state
+
+
 def iter_states() -> list[dict[str, Any]]:
     states: list[dict[str, Any]] = []
     for path in sorted(ENVS_DIR.glob("env-*.json")):
@@ -91,6 +125,70 @@ def iter_states() -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             api_log("WARN", f"skipping invalid state file {path.name}")
     return states
+
+
+def visible_states() -> list[dict[str, Any]]:
+    return [state for state in iter_states() if state.get("status") != "destroying"]
+
+
+def find_state_by_name(name: str) -> dict[str, Any] | None:
+    for state in visible_states():
+        if state.get("name") == name:
+            return state
+    return None
+
+
+def new_env_id() -> str:
+    for _ in range(100):
+        env_id = f"env-{secrets.token_hex(4)}"
+        if not state_path(env_id).exists():
+            return env_id
+    raise RuntimeError("could not allocate unique env id")
+
+
+def manifest_defaults() -> dict[str, Any]:
+    try:
+        import yaml
+
+        with (REPO_ROOT / "manifest.yaml").open(encoding="utf-8") as fh:
+            manifest = yaml.safe_load(fh) or {}
+        defaults = manifest.get("defaults", {})
+        return defaults if isinstance(defaults, dict) else {}
+    except Exception as exc:  # pragma: no cover - defensive startup fallback
+        api_log("WARN", f"manifest defaults unavailable: {exc}")
+        return {}
+
+
+def initial_state(env_id: str, name: str, ttl: int) -> dict[str, Any]:
+    defaults = manifest_defaults()
+    ingress_port = os.getenv("INGRESS_PORT", "18080")
+    public_base = os.getenv("PUBLIC_BASE_URL", f"http://localhost:{ingress_port}")
+    public_base = public_base.rstrip("/")
+    app_port = str(os.getenv("APP_PORT", defaults.get("app_port", "8080")))
+    image = str(os.getenv("DEMO_IMAGE", defaults.get("image", "sandbox-demo:1.0.0")))
+    created_at = utc_now()
+    return {
+        "id": env_id,
+        "name": name,
+        "created_at": created_at,
+        "ttl_minutes": ttl,
+        "status": "creating",
+        "url": f"{public_base}/{env_id}/",
+        "name_url": f"{public_base}/{name}/",
+        "internal_url": f"http://nginx/{env_id}/",
+        "network": f"sandboxnet-{env_id}",
+        "container_id": "",
+        "image": image,
+        "labels": {
+            "sandbox.env": env_id,
+            "sandbox.role": "app",
+            "sandbox.created_at": created_at,
+        },
+        "bg_pids": {},
+        "last_outage": None,
+        "consecutive_failures": 0,
+        "app_port": app_port,
+    }
 
 
 def ttl_remaining_seconds(state: dict[str, Any]) -> int:
@@ -126,6 +224,45 @@ def run_script(args: list[str], timeout: int = 90) -> subprocess.CompletedProces
         capture_output=True,
         timeout=timeout,
         check=False,
+    )
+
+
+def wait_for_script(
+    proc: subprocess.Popen[str],
+    label: str,
+    env_id: str,
+    sync_seconds: float,
+) -> subprocess.CompletedProcess[str] | None:
+    try:
+        stdout, stderr = proc.communicate(timeout=sync_seconds)
+        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+    except subprocess.TimeoutExpired:
+
+        def reap() -> None:
+            stdout, stderr = proc.communicate()
+            if proc.returncode == 0:
+                api_log("INFO", f"{label} completed in background", env_id)
+            else:
+                api_log(
+                    "ERROR",
+                    f"{label} background failed rc={proc.returncode}: {stderr[-1000:]}",
+                    env_id,
+                )
+            if stdout:
+                api_log("INFO", f"{label} stdout: {stdout[-500:]}", env_id)
+
+        thread = threading.Thread(target=reap, daemon=True)
+        thread.start()
+        return None
+
+
+def start_script(args: list[str]) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        args,
+        cwd=REPO_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
 
 
@@ -169,7 +306,7 @@ def health() -> dict[str, str]:
 
 @app.get("/api/v1/envs")
 def list_envs() -> dict[str, Any]:
-    envs = [state_summary(state) for state in iter_states()]
+    envs = [state_summary(state) for state in visible_states()]
     return {"envs": envs, "count": len(envs)}
 
 
@@ -190,17 +327,39 @@ async def create_env(request: Request):
             422, "validation_error", "invalid create request", details
         )
 
-    proc = run_script(
-        ["bash", "platform/create_env.sh", "--name", name, "--ttl-minutes", str(ttl)],
-        timeout=150,
+    existing = find_state_by_name(name)
+    if existing:
+        return JSONResponse(status_code=201, content=state_summary(existing))
+
+    env_id = new_env_id()
+    pending_state = initial_state(env_id, name, ttl)
+    write_state_atomic(env_id, pending_state)
+    proc = start_script(
+        [
+            "bash",
+            "platform/create_env.sh",
+            "--name",
+            name,
+            "--ttl-minutes",
+            str(ttl),
+            "--env-id",
+            env_id,
+        ]
     )
-    if proc.returncode != 0:
-        api_log("ERROR", f"create failed: {proc.stderr.strip()}")
+    completed = wait_for_script(proc, "create_env.sh", env_id, CREATE_SYNC_SECONDS)
+    if completed is None:
+        return JSONResponse(status_code=201, content=state_summary(pending_state))
+    if completed.returncode != 0:
+        update_state_fields(env_id, {"status": "error"})
+        api_log("ERROR", f"create failed: {completed.stderr.strip()}", env_id)
         return error_response(
-            502, "bad_gateway", "create_env.sh failed", {"stderr": proc.stderr[-1000:]}
+            502,
+            "bad_gateway",
+            "create_env.sh failed",
+            {"stderr": completed.stderr[-1000:]},
         )
-    env_id = find_env_id_in_stdout(proc.stdout)
-    if not env_id:
+    returned_env_id = find_env_id_in_stdout(completed.stdout)
+    if returned_env_id != env_id:
         return error_response(500, "internal_error", "create did not return an env id")
     state = load_state(env_id)
     if not state:
@@ -210,12 +369,18 @@ async def create_env(request: Request):
 
 @app.delete("/api/v1/envs/{env_id}")
 def destroy_env(env_id: str):
-    if not ENV_ID_RE.match(env_id) or not state_path(env_id).exists():
+    state = load_state(env_id) if ENV_ID_RE.match(env_id) else None
+    if not state or state.get("status") == "destroying":
         return error_response(404, "not_found", "env not found")
-    proc = run_script(["bash", "platform/destroy_env.sh", env_id], timeout=90)
-    if proc.returncode != 0:
+    update_state_fields(env_id, {"status": "destroying"})
+    proc = start_script(["bash", "platform/destroy_env.sh", env_id])
+    completed = wait_for_script(proc, "destroy_env.sh", env_id, DESTROY_SYNC_SECONDS)
+    if completed is not None and completed.returncode != 0:
         return error_response(
-            502, "bad_gateway", "destroy_env.sh failed", {"stderr": proc.stderr[-1000:]}
+            502,
+            "bad_gateway",
+            "destroy_env.sh failed",
+            {"stderr": completed.stderr[-1000:]},
         )
     return Response(status_code=204)
 
@@ -311,15 +476,27 @@ async def trigger_outage(env_id: str, request: Request):
     precheck = outage_precheck(env_id, mode, state)
     if precheck is not None:
         return precheck
-    proc = run_script(
-        ["bash", "platform/simulate_outage.sh", "--env", env_id, "--mode", mode],
-        timeout=90,
-    )
-    if proc.returncode != 0:
-        status = 412 if proc.returncode == 2 else 502
-        code = "precondition_failed" if proc.returncode == 2 else "bad_gateway"
+    args = ["bash", "platform/simulate_outage.sh", "--env", env_id, "--mode", mode]
+    if mode == "recover":
+        proc = start_script(args)
+        completed = wait_for_script(
+            proc, "simulate_outage.sh recover", env_id, RECOVER_SYNC_SECONDS
+        )
+        if completed is None:
+            return JSONResponse(
+                status_code=202,
+                content={"env_id": env_id, "mode": mode, "applied_at": utc_now()},
+            )
+    else:
+        completed = run_script(args, timeout=90)
+    if completed.returncode != 0:
+        status = 412 if completed.returncode == 2 else 502
+        code = "precondition_failed" if completed.returncode == 2 else "bad_gateway"
         return error_response(
-            status, code, "simulate_outage.sh failed", {"stderr": proc.stderr[-1000:]}
+            status,
+            code,
+            "simulate_outage.sh failed",
+            {"stderr": completed.stderr[-1000:]},
         )
     return JSONResponse(
         status_code=202,

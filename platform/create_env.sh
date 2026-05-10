@@ -14,15 +14,20 @@ source "${LIB_DIR}/nginx_render.sh"
 source "${LIB_DIR}/state.sh"
 
 usage() {
-    printf '%s\n' "usage: create_env.sh --name <name> [--ttl-minutes <1-${MAX_TTL_MIN}>]" >&2
+    printf '%s\n' "usage: create_env.sh --name <name> [--ttl-minutes <1-${MAX_TTL_MIN}>] [--env-id env-abc12345]" >&2
 }
 
+requested_env_id=""
 name=""
 ttl_minutes="$DEFAULT_TTL_MIN"
 while (($#)); do
     case "$1" in
         --name)
             name="${2:-}"
+            shift 2
+            ;;
+        --env-id)
+            requested_env_id="${2:-}"
             shift 2
             ;;
         --ttl-minutes | --ttl)
@@ -62,6 +67,11 @@ if ! validate_ttl "$ttl_minutes"; then
     exit 2
 fi
 
+if [[ -n "$requested_env_id" ]] && ! validate_env_id "$requested_env_id"; then
+    printf '%s\n' "invalid env id: ${requested_env_id}" >&2
+    exit 2
+fi
+
 free_kb="$(df -Pk "$REPO_ROOT" | awk 'NR == 2 { print $4 }')"
 if ((free_kb < 1048576)); then
     log ERROR create_env - "refusing create: less than 1 GiB free"
@@ -69,15 +79,33 @@ if ((free_kb < 1048576)); then
 fi
 
 existing_id="$(find_env_by_name "$name" || true)"
-if [[ -n "$existing_id" ]]; then
+if [[ -n "$existing_id" && "$existing_id" != "$requested_env_id" ]]; then
     existing_url="$(read_state_field "$existing_id" url)"
     log INFO create_env "$existing_id" "name already active; returning existing env"
     printf 'ENV_ID: %s\nURL: %s\nTTL: %s minutes\n' "$existing_id" "$existing_url" "$(read_state_field "$existing_id" ttl_minutes)"
     exit 0
 fi
 
-env_id="$(new_env_id)"
+if [[ -n "$existing_id" && "$existing_id" == "$requested_env_id" ]]; then
+    existing_status="$(read_state_field "$existing_id" status || true)"
+    if [[ "$existing_status" != "creating" ]]; then
+        existing_url="$(read_state_field "$existing_id" url)"
+        log INFO create_env "$existing_id" "name already active; returning existing env"
+        printf 'ENV_ID: %s\nURL: %s\nTTL: %s minutes\n' "$existing_id" "$existing_url" "$(read_state_field "$existing_id" ttl_minutes)"
+        exit 0
+    fi
+fi
+
+env_id="${requested_env_id:-$(new_env_id)}"
 created_at="$(ts)"
+preexisting_state=0
+if state_exists "$env_id"; then
+    preexisting_state=1
+    existing_created_at="$(read_state_field "$env_id" created_at || true)"
+    if [[ -n "$existing_created_at" ]]; then
+        created_at="$existing_created_at"
+    fi
+fi
 network_name="sandboxnet-${env_id}"
 container_name="sandbox-${env_id}-app"
 url="${PUBLIC_BASE_URL}/${env_id}/"
@@ -109,7 +137,9 @@ rollback() {
     if ((network_created)); then
         docker network rm "$network_name" >/dev/null 2>&1 || true
     fi
-    if ((state_written)); then
+    if ((preexisting_state)); then
+        update_state_field "$env_id" status error >/dev/null 2>&1 || true
+    elif ((state_written)); then
         delete_state "$env_id"
     fi
     rm -rf -- "${LOGS_DIR:?}/${env_id}"
