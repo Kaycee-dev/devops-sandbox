@@ -64,11 +64,20 @@ jobs:
       - name: Run pre-commit on all files
         run: pre-commit run --all-files --show-diff-on-failure
 
-      - name: Gitleaks (full history)
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: ci/gitleaks.toml
+      # We invoke gitleaks directly instead of via gitleaks/gitleaks-action@v2
+      # because that action assumes a parent commit exists for the pushed
+      # range (`<before>^..<after>`). On the very first push to a fresh repo
+      # `<before>^` does not exist and the action fails with "ambiguous
+      # argument", scanning 0 bytes. The direct binary invocation matches
+      # exactly what we run locally via `pre-commit run` and `gitleaks detect`.
+      # See journal/2026-05-09-01-bootstrap.md for the failure analysis.
+      - name: Gitleaks (working tree, no git history)
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION=8.24.3
+          curl -fsSL "https://github.com/zricethezav/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar xz -C /tmp gitleaks
+          /tmp/gitleaks detect --config ci/gitleaks.toml --no-git --redact -v --source .
 
       - name: Shellcheck
         run: bash ci/shellcheck.sh
