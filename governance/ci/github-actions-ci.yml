@@ -82,7 +82,14 @@ jobs:
       - name: Shellcheck
         run: bash ci/shellcheck.sh
 
+      # Skip when no Dockerfile is present yet. hadolint-action defaults to
+      # `**/Dockerfile` and exits non-zero with "does not exist" when no
+      # match is found — that surfaces in Sprint 0 (no demo-app/Dockerfile yet)
+      # as a CI failure even though the lint had no work to do. Once Sprint 1
+      # adds demo-app/Dockerfile this conditional becomes truthy and the
+      # action runs normally. See journal/2026-05-09-01-bootstrap.md.
       - name: Hadolint (every Dockerfile)
+        if: hashFiles('**/Dockerfile') != ''
         uses: hadolint/hadolint-action@v3.1.0
         with:
           recursive: true
@@ -95,6 +102,10 @@ jobs:
     name: build-test
     runs-on: ubuntu-22.04
     needs: lint
+    # Skip until docker-compose.yml lands (Sprint 1). Without it
+    # `docker compose build` fails immediately, blocking the rest of the
+    # job on artefacts that do not yet exist.
+    if: hashFiles('docker-compose.yml') != ''
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -169,6 +180,9 @@ jobs:
     name: trivy
     runs-on: ubuntu-22.04
     needs: lint
+    # Skip until docker-compose.yml lands (Sprint 1). Trivy needs a built
+    # image; without compose there is nothing to build and scan.
+    if: hashFiles('docker-compose.yml') != ''
     steps:
       - name: Checkout
         uses: actions/checkout@v4
