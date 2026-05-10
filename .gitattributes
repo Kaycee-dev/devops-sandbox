@@ -1,0 +1,52 @@
+# =============================================================================
+# .gitattributes
+# -----------------------------------------------------------------------------
+# Force LF line endings across the Windows host, the WSL2 dev environment,
+# and the Linux CI runner. Without this, every checkout swap drags noisy
+# CRLF/LF diffs through the working tree.
+#
+# See journal/2026-05-09-01-bootstrap.md (TEACH-BACK: WSL2 over Windows-native).
+# =============================================================================
+
+# Default to LF for any text file we don't otherwise classify.
+* text=auto eol=lf
+
+# Source code
+*.sh        text eol=lf
+*.py        text eol=lf
+*.js        text eol=lf
+*.ts        text eol=lf
+*.json      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.rego      text eol=lf
+Dockerfile  text eol=lf
+Makefile    text eol=lf
+
+# Templates that ship as-is
+*.txt       text eol=lf
+
+# Binaries — never normalise.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+*.zip       binary
+*.tar       binary
+*.tar.gz    binary
+*.tgz       binary
+*.gz        binary
+
+# Lockfiles — keep as-is so tooling can see them unchanged.
+package-lock.json   text eol=lf -diff
+poetry.lock         text eol=lf -diff
+requirements*.txt   text eol=lf
+
+# Linguist hints so GitHub doesn't classify us as e.g. HTML.
+governance/** linguist-documentation
+journal/**    linguist-documentation
+docs/**       linguist-documentation

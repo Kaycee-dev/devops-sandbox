@@ -1,0 +1,178 @@
+# =============================================================================
+# .github/workflows/ci.yml
+# -----------------------------------------------------------------------------
+# Drop into .github/workflows/ at the repo root.
+#
+# Jobs:
+#   1. lint        — pre-commit, gitleaks, shellcheck, hadolint
+#   2. build-test  — docker compose build, smoke test the API end-to-end
+#                    via the Postman collection (newman), then tear down
+#   3. trivy       — scan built images for HIGH/CRITICAL CVEs
+#
+# All three are required for merge to main (set as required checks in the
+# branch protection rules — see governance/07_DEVSECOPS_GUARDRAILS.md §9).
+# =============================================================================
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  COMPOSE_DOCKER_CLI_BUILD: "1"
+  DOCKER_BUILDKIT: "1"
+
+jobs:
+  # ===========================================================================
+  # 1. Lint
+  # ===========================================================================
+  lint:
+    name: lint
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks needs full history
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pre-commit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Install pre-commit
+        run: pip install pre-commit==3.7.1
+
+      - name: Run pre-commit on all files
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      - name: Gitleaks (full history)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: ci/gitleaks.toml
+
+      - name: Shellcheck
+        run: bash ci/shellcheck.sh
+
+      - name: Hadolint (every Dockerfile)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          recursive: true
+          failure-threshold: warning
+
+  # ===========================================================================
+  # 2. Build + smoke test
+  # ===========================================================================
+  build-test:
+    name: build-test
+    runs-on: ubuntu-22.04
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Node (for newman)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install newman
+        run: npm install -g newman@6.2.1
+
+      - name: Prepare .env
+        run: |
+          cp .env.example .env
+          # CI runs with a fixed token so the Postman pack can hit the API.
+          echo "API_TOKEN=ci-test-token-do-not-reuse" >> .env
+
+      - name: Build platform images
+        run: docker compose build --pull
+
+      - name: Boot platform
+        run: |
+          make up
+          # wait up to 30s for the API to be reachable
+          for i in $(seq 1 30); do
+              if curl -sf http://localhost:18081/api/v1/envs >/dev/null 2>&1; then
+                  echo "API up after ${i}s"
+                  break
+              fi
+              sleep 1
+          done
+
+      - name: Run Postman pack against live API
+        env:
+          API_TOKEN: ci-test-token-do-not-reuse
+        run: |
+          # Override apiToken in the local env file at runtime.
+          newman run postman/DevOpsSandbox.postman_collection.json \
+              --environment postman/DevOpsSandbox-Local.postman_environment.json \
+              --env-var "apiToken=${API_TOKEN}" \
+              --reporters cli,junit \
+              --reporter-junit-export newman-results.xml
+
+      - name: Upload newman results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: newman-results
+          path: newman-results.xml
+
+      - name: Upload platform logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-logs
+          path: |
+            logs/
+            envs/
+
+      - name: Tear down
+        if: always()
+        run: make down || true
+
+  # ===========================================================================
+  # 3. Trivy CVE scan
+  # ===========================================================================
+  trivy:
+    name: trivy
+    runs-on: ubuntu-22.04
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build images
+        run: docker compose build --pull
+
+      - name: Trivy — fail on HIGH/CRITICAL
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: image
+          image-ref: devops-sandbox-api:latest
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          format: table

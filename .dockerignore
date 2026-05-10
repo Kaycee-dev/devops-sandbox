@@ -1,0 +1,67 @@
+# =============================================================================
+# .dockerignore
+# -----------------------------------------------------------------------------
+# Anything in here is excluded from the build context sent to `docker build`.
+# Smaller context = faster builds, no accidental secret leakage into images.
+#
+# See governance/07_DEVSECOPS_GUARDRAILS.md §2.
+# =============================================================================
+
+# VCS
+.git
+.gitignore
+.gitattributes
+.github
+
+# Secrets — explicit deny on top of .gitignore.
+.env
+.env.*
+!.env.example
+
+# Runtime state and logs — never bake into images.
+envs/
+logs/
+nginx/conf.d/*.conf
+!nginx/conf.d/.gitkeep
+
+# Editors and OS junk
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Python build artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node (only if a future demo app uses it)
+node_modules/
+npm-debug.log*
+
+# Governance — agents and humans need it; images do not.
+governance/
+journal/
+docs/
+evidence/
+postman/
+policies/
+scripts/
+task_details.md
+AGENTS.md
+README.md
+
+# Test outputs
+newman-results.xml
+*.bats.tap
+
+# Misc
+*.log
+*.tmp
+*.bak
+governance-pack.zip

@@ -1,0 +1,481 @@
+{
+  "info": {
+    "_postman_id": "devops-sandbox-stage5",
+    "name": "DevOpsSandbox-Stage5",
+    "description": "Test pack for HNG14 DevOps Stage 5 — DevOps Sandbox Platform.\n\nFolders are ordered as a single linear flow. Run with the Collection Runner top-to-bottom against either the Local or Server environment.\n\n## Variable chaining\n\n- `Lifecycle > Create env` writes `created_env_id`, `created_env_name`, `created_env_url` to the environment.\n- All later requests use those.\n- `Cleanup > Destroy env` clears them.\n\n## What this pack proves\n\nAcceptance rows (see `governance/03_ACCEPTANCE_CRITERIA.md`):\n  - A28-A35 (Control API endpoints)\n  - A36-A40 (error contract)\n  - A18-A21 (outage simulation)\n  - A22-A24 (health monitoring observable through API)\n  - B17-B25 (implied: idempotency, error shape, ID format)\n\n## Auth\n\nIf `apiToken` is set, every request sends `X-API-Token: {{apiToken}}`. If empty, requests go unauthenticated — matches the platform default.\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key",   "value": "X-API-Token",   "type": "string" },
+      { "key": "value", "value": "{{apiToken}}",  "type": "string" },
+      { "key": "in",    "value": "header",        "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Skip auth header when token is unset — the platform runs open by default.",
+          "if (!pm.environment.get('apiToken')) {",
+          "    pm.request.headers.remove('X-API-Token');",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Global checks every response should pass.",
+          "pm.test('Content-Type is JSON when body is non-empty', function () {",
+          "    if (pm.response.text() && pm.response.text().length > 0) {",
+          "        pm.expect(pm.response.headers.get('Content-Type') || '').to.match(/application\\/json/);",
+          "    }",
+          "});",
+          "pm.test('Response time < 5s', function () {",
+          "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [],
+  "item": [
+    {
+      "name": "0. Pre-flight",
+      "description": "Cheap sanity checks before the lifecycle flow.",
+      "item": [
+        {
+          "name": "List envs (baseline)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs"]
+            },
+            "description": "Should succeed even if no envs exist. Records the starting count so the cleanup folder can verify we netted zero new envs at the end."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Body has envs array', () => pm.expect(body).to.have.property('envs').that.is.an('array'));",
+                  "pm.environment.set('baseline_env_count', body.envs.length);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Lifecycle — happy path",
+      "description": "Create → list → logs → health → outage crash → outage recover → destroy.",
+      "item": [
+        {
+          "name": "Create env",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"name\": \"{{demo_env_name}}\",\n    \"ttl_minutes\": {{demo_env_ttl_minutes}}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Has env_id matching env-[0-9a-f]{8}', () => {",
+                  "    pm.expect(body.id).to.match(/^env-[0-9a-f]{8}$/);",
+                  "});",
+                  "pm.test('Has name, ttl_minutes, status, url, expires_at', () => {",
+                  "    ['name','ttl_minutes','status','url','expires_at','created_at'].forEach(k => {",
+                  "        pm.expect(body, `missing ${k}`).to.have.property(k);",
+                  "    });",
+                  "});",
+                  "pm.test('Status is one of creating|running', () => {",
+                  "    pm.expect(['creating','running']).to.include(body.status);",
+                  "});",
+                  "pm.environment.set('created_env_id',   body.id);",
+                  "pm.environment.set('created_env_name', body.name);",
+                  "pm.environment.set('created_env_url',  body.url);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wait 6s for container readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs", "host": ["{{baseUrl}}"], "path": ["api", "v{{apiVersion}}", "envs"] }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Cheap sleep — gives the app container time to bind its port",
+                  "// and the monitor time to take its first poll.",
+                  "setTimeout(() => {}, 6000);",
+                  "const start = Date.now();",
+                  "while (Date.now() - start < 6000) { /* spin */ }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List envs (created one is present)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs", "host": ["{{baseUrl}}"], "path": ["api", "v{{apiVersion}}", "envs"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const id = pm.environment.get('created_env_id');",
+                  "pm.test('Created env appears in list', () => {",
+                  "    pm.expect(body.envs.map(e => e.id)).to.include(id);",
+                  "});",
+                  "pm.test('Each env has ttl_remaining_seconds', () => {",
+                  "    body.envs.forEach(e => pm.expect(e).to.have.property('ttl_remaining_seconds'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get logs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs/{{created_env_id}}/logs",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs", "{{created_env_id}}", "logs"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Has lines array <= 100', () => {",
+                  "    pm.expect(body).to.have.property('lines').that.is.an('array');",
+                  "    pm.expect(body.lines.length).to.be.at.most(100);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get health (last 10)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs/{{created_env_id}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs", "{{created_env_id}}", "health"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('Has checks array <= 10', () => {",
+                  "    pm.expect(body).to.have.property('checks').that.is.an('array');",
+                  "    pm.expect(body.checks.length).to.be.at.most(10);",
+                  "});",
+                  "if (body.checks.length > 0) {",
+                  "    pm.test('Check has timestamp, http_status, latency_ms', () => {",
+                  "        ['timestamp','http_status','latency_ms'].forEach(k => {",
+                  "            pm.expect(body.checks[0], `missing ${k}`).to.have.property(k);",
+                  "        });",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Trigger outage — crash",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n    \"mode\": \"crash\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs/{{created_env_id}}/outage",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs", "{{created_env_id}}", "outage"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.test('Echoes mode=crash', () => pm.expect(body.mode).to.eql('crash'));",
+                  "pm.test('Returns env_id', () => pm.expect(body.env_id).to.eql(pm.environment.get('created_env_id')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Trigger outage — recover",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n    \"mode\": \"recover\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs/{{created_env_id}}/outage",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs", "{{created_env_id}}", "outage"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('Echoes mode=recover', () => pm.expect(pm.response.json().mode).to.eql('recover'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Error paths",
+      "description": "Negative tests — every error path returns the unified error shape.",
+      "item": [
+        {
+          "name": "Get logs for non-existent env (404)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs/env-deadbeef/logs",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs", "env-deadbeef", "logs"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "const body = pm.response.json();",
+                  "pm.test('Error shape: error.code = not_found', () => {",
+                  "    pm.expect(body).to.have.property('error');",
+                  "    pm.expect(body.error.code).to.eql('not_found');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create env with invalid name (400)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n    \"name\": \"---NOPE---\",\n    \"ttl_minutes\": 5\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "const body = pm.response.json();",
+                  "pm.test('Error code = validation_error', () => {",
+                  "    pm.expect(body.error.code).to.eql('validation_error');",
+                  "});",
+                  "pm.test('Error has details array', () => {",
+                  "    pm.expect(body.error).to.have.property('details').that.is.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Outage with invalid mode (422)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n    \"mode\": \"vaporize\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs/{{created_env_id}}/outage",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs", "{{created_env_id}}", "outage"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Entity', () => pm.response.to.have.status(422));",
+                  "pm.test('Error code = validation_error', () => {",
+                  "    pm.expect(pm.response.json().error.code).to.eql('validation_error');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Cleanup",
+      "description": "Destroy the env created in folder 1, then verify the platform returned to baseline.",
+      "item": [
+        {
+          "name": "Destroy env",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs/{{created_env_id}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs", "{{created_env_id}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content or 200 OK', () => {",
+                  "    pm.expect([200, 204]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Destroy same env again (idempotent — 404)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs/{{created_env_id}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v{{apiVersion}}", "envs", "{{created_env_id}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 on second delete', () => pm.response.to.have.status(404));",
+                  "pm.test('Error code = not_found', () => {",
+                  "    pm.expect(pm.response.json().error.code).to.eql('not_found');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Final list (back to baseline)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v{{apiVersion}}/envs", "host": ["{{baseUrl}}"], "path": ["api", "v{{apiVersion}}", "envs"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const baseline = parseInt(pm.environment.get('baseline_env_count') || '0', 10);",
+                  "pm.test('Net zero new envs vs baseline', () => {",
+                  "    pm.expect(body.envs.length).to.eql(baseline);",
+                  "});",
+                  "pm.environment.unset('created_env_id');",
+                  "pm.environment.unset('created_env_name');",
+                  "pm.environment.unset('created_env_url');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

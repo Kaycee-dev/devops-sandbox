@@ -1,0 +1,59 @@
+# =============================================================================
+# ci/gitleaks.toml
+# -----------------------------------------------------------------------------
+# Extends the gitleaks default ruleset with project-specific allow/deny rules.
+#
+# Run locally:
+#     gitleaks detect --config ci/gitleaks.toml --no-git --redact -v
+#
+# See governance/07_DEVSECOPS_GUARDRAILS.md §1.
+# =============================================================================
+
+[extend]
+useDefault = true
+
+# -----------------------------------------------------------------------------
+# Project-specific rules — catch our own naming conventions.
+# -----------------------------------------------------------------------------
+[[rules]]
+id           = "sandbox-api-token"
+description  = "API_TOKEN value committed to source"
+# Use [ \t]* instead of \s* so the rule cannot match across newlines (which
+# previously caused API_TOKEN=\n\nDEFAULT_TTL_MIN=30 to flag DEFAULT_TTL_MIN
+# as the "secret"). See journal/2026-05-09-01-bootstrap.md.
+regex        = '''(?i)(?:^|[^A-Z0-9_])API_TOKEN[ \t]*=[ \t]*['"]?[A-Za-z0-9_\-\.]{12,}['"]?'''
+keywords     = ["API_TOKEN"]
+tags         = ["secret", "api"]
+
+[[rules]]
+id           = "sandbox-generic-key-suffix"
+description  = "Hardcoded *_KEY value (any var ending _KEY with a long literal)"
+regex        = '''(?i)[A-Z0-9_]+_KEY[ \t]*=[ \t]*['"][A-Za-z0-9_\-\.\/+=]{20,}['"]'''
+keywords     = ["_KEY"]
+tags         = ["secret"]
+
+# -----------------------------------------------------------------------------
+# Allowlist — placeholder values we deliberately commit.
+# -----------------------------------------------------------------------------
+# NOTE on path regex: TOML literal strings ('''...''') do NOT process escape
+# sequences — `\\` is two literal backslashes, not "escaped backslash". So a
+# pattern like `'''(.*\\.example$)'''` compiles to the regex `.*\\.example$`,
+# which requires a backslash before `.example` and never matches `.env.example`.
+# Use single-backslash literal-period: `'''.*\.example$'''`.
+[allowlist]
+description = "Allowed test/example tokens"
+paths = [
+    '''.*\.example$''',
+    '''.*/fixtures/.*''',
+    '''governance/.*''',
+    '''.*\.postman_environment\.json$''',
+]
+regexes = [
+    '''CHANGE-?ME''',
+    '''REPLACE-?ME''',
+    '''<your-?token>''',
+    '''dummy-?token''',
+    '''example-?token''',
+    '''ci-test-token-do-not-reuse''',
+    '''do-not-reuse''',
+]

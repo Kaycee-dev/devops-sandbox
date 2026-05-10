@@ -1,0 +1,112 @@
+# =============================================================================
+# .pre-commit-config.yaml
+# -----------------------------------------------------------------------------
+# Drop this at the repo root. Wire it up with:
+#     pip install pre-commit
+#     pre-commit install
+#     pre-commit run --all-files
+#
+# Every hook here is also enforced in CI (see ci/github-actions-ci.yml) so
+# the local feedback loop matches the gate.
+#
+# See governance/07_DEVSECOPS_GUARDRAILS.md §8.
+# =============================================================================
+
+default_install_hook_types: [pre-commit, commit-msg]
+default_stages: [pre-commit]
+
+repos:
+  # ---------------------------------------------------------------------------
+  # Hygiene
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: ['--unsafe']  # allow custom tags in compose files
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ['--maxkb=512']
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: ['--fix=lf']
+
+  # ---------------------------------------------------------------------------
+  # Secret scanning
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+        args: ['--config=ci/gitleaks.toml']
+
+  # ---------------------------------------------------------------------------
+  # Shell — every .sh file must pass shellcheck and be formatted with shfmt.
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+        args: ['--severity=warning', '--external-sources']
+
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.8.0-1
+    hooks:
+      - id: shfmt
+        args: ['-i', '4', '-ci', '-bn', '-d']
+
+  # ---------------------------------------------------------------------------
+  # Dockerfile lint
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint-docker
+        args: ['--failure-threshold=warning']
+
+  # ---------------------------------------------------------------------------
+  # Python — ruff covers lint + format. mypy on the API only.
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.5
+    hooks:
+      - id: ruff
+        args: ['--fix']
+      - id: ruff-format
+
+  # ---------------------------------------------------------------------------
+  # Conventional Commits enforcement
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, docs, chore, refactor, test, ci, build, perf]
+
+  # ---------------------------------------------------------------------------
+  # Local hooks — enforced by repo scripts.
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: governance-matrix-touched
+        name: governance acceptance matrix touched on functional changes
+        entry: scripts/check_acceptance_matrix.sh
+        language: script
+        pass_filenames: false
+        stages: [pre-commit]
+        # Fails the commit if files under platform/, monitor/, nginx/, or
+        # Makefile changed but governance/03_ACCEPTANCE_CRITERIA.md did not.
+        # Forces the agent to keep traceability honest.
+
+      - id: journal-entry-on-feat
+        name: journal entry exists for today on feat/fix commits
+        entry: scripts/check_journal_today.sh
+        language: script
+        pass_filenames: false
+        stages: [commit-msg]
+        # Fails commit-msg if the message starts with feat:/fix: but no
+        # journal/YYYY-MM-DD-*.md was added or updated in this commit.

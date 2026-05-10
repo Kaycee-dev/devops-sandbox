@@ -1,0 +1,34 @@
+# Runtime state — brief requires these gitignored
+logs/
+envs/
+
+# Auto-generated per-env Nginx configs (only the dir is tracked)
+nginx/conf.d/*.conf
+!nginx/conf.d/.gitkeep
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Misc
+*.log
+*.tmp
+*.bak
+
+# Already extracted
+governance-pack.zip

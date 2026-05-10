@@ -1,0 +1,69 @@
+                          ┌─────────────────────────────┐
+                          │       Operator / curl       │
+                          │       (host, port 18080)    │
+                          └──────────────┬──────────────┘
+                                         │
+                                         ▼
+                          ┌─────────────────────────────┐
+                          │   Nginx  (sandbox-nginx)    │
+                          │   nginx.conf includes       │
+                          │   conf.d/*.conf (per-env)   │
+                          └─┬──────────┬──────────┬─────┘
+                            │          │          │
+                ┌───────────┘          │          └────────────┐
+                │                      │                       │
+                ▼                      ▼                       ▼
+   ┌────────────────────┐ ┌────────────────────┐ ┌────────────────────┐
+   │  sandboxnet-       │ │  sandboxnet-       │ │  sandboxnet-       │
+   │  env-a3f9b2c1      │ │  env-7e21f04c      │ │  env-…             │
+   │  ┌──────────────┐  │ │  ┌──────────────┐  │ │  ┌──────────────┐  │
+   │  │  demo-app    │  │ │  │  demo-app    │  │ │  │  demo-app    │  │
+   │  │  (Flask)     │  │ │  │  (Flask)     │  │ │  │  (Flask)     │  │
+   │  │  /, /health  │  │ │  │  /, /health  │  │ │  │  /, /health  │  │
+   │  │  cpus=1 mem= │  │ │  │  cpus=1 mem= │  │ │  │  cpus=1 mem= │  │
+   │  │   512m       │  │ │  │   512m       │  │ │  │   512m       │  │
+   │  └──────────────┘  │ │  └──────────────┘  │ │  └──────────────┘  │
+   └────────────────────┘ └────────────────────┘ └────────────────────┘
+
+         ▲   ▲   ▲                                  /var/run/docker.sock
+         │   │   │                                          ▲
+         │   │   │                                          │
+         │   │   │                  ┌──────────────────────┴─────────────┐
+         │   │   │                  │      sandboxnet-platform           │
+         │   │   │                  │                                    │
+         │   │   │                  │  ┌─────────────┐  ┌─────────────┐  │
+         │   │   │                  │  │ Control API │  │   Cleanup   │  │
+         │   │   └──────/health─────┼──┤ (FastAPI)   │  │   Daemon    │  │
+         │   │                      │  │ /api/v1/*   │  │  60s loop   │  │
+         │   │                      │  └──────┬──────┘  └──────┬──────┘  │
+         │   │                      │         │                │         │
+         │   │                      │         │                │         │
+         │   └─/health (30s)────────┼─────────┘  ┌─────────────┘         │
+         │                          │            │                       │
+         │                          │   ┌────────▼────────┐              │
+         │                          │   │  Health Monitor │              │
+         │                          │   │   (Python)      │              │
+         │                          │   └─────────────────┘              │
+         │                          └────────────────────────────────────┘
+         │
+         │   reads/writes
+         ▼
+   ┌──────────────────────────────────────────────────────────────────┐
+   │   Host volumes                                                   │
+   │   • envs/                  per-env state JSON (atomic writes)    │
+   │   • logs/<env_id>/         app.log + health.log                  │
+   │   • logs/cleanup.log       daemon actions                        │
+   │   • logs/api.log           API access log                        │
+   │   • logs/archived/<env>/   destroy-time log archives             │
+   │   • history.jsonl          append-only event log (audit source)  │
+   │   • manifest.yaml          source of truth for defaults & ports  │
+   │   • .env  (mode 600)       secrets (API_TOKEN, etc.)             │
+   └──────────────────────────────────────────────────────────────────┘
+
+  Legend
+  ──────
+  Solid lines (▼)        : network traffic
+  "reads/writes" arrow   : file-system access
+  Each per-env Docker network is isolated; Nginx is connected to all of
+  them at create-time and disconnected at destroy-time. The platform
+  network carries control traffic only — it never reaches user code.
