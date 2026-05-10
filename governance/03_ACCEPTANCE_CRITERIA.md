@@ -105,7 +105,7 @@ These are not in the brief's bullet list, but a reviewer would dock points for m
 |---|---|---|---|---|---|---|
 | C01 | gitleaks clean | `governance/ci/gitleaks.toml` → `.gitleaks.toml` | — | CI gate | journal/2026-05-09-01-bootstrap | ☑ |
 | C02 | pre-commit hooks installed | `governance/ci/pre-commit-config.yaml` | — | local hook fire | journal/2026-05-09-01-bootstrap | ☑ |
-| C03 | Trivy scan on every image build (optional, target if time) | `.github/workflows/ci.yml` | — | CI artifact | …05-ship | ☐ |
+| C03 | Trivy scan on every image build (optional, target if time) | `.github/workflows/ci.yml` | — | CI artifact: run 25628845899 | journal/2026-05-10-06-ci-repair | ☑ |
 | C04 | GitHub Actions CI runs Newman against the local stack | `.github/workflows/ci.yml` | — | green check on PR | …05-ship | ☑ |
 | C05 | OPA policies for create + outage (extra credit) | `policies/*.rego` | — | unit tests in `policies/test/` | …05-ship (if shipped) | ☐ |
 | C06 | Local pre-commit hooks `governance-matrix-touched` and `journal-entry-on-feat` exist, are executable, and pass on a manufactured negative case (commit touching `platform/` without matrix update fails as expected) | `scripts/check_acceptance_matrix.sh`, `scripts/check_journal_today.sh` | — | manufactured-negative-case run inside WSL | journal/2026-05-09-01-bootstrap | ☑ |
