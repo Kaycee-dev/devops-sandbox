@@ -1,0 +1,45 @@
+# Runtime source of truth for the DevOps Sandbox platform.
+version: 1
+
+defaults:
+  ttl_minutes: 30
+  max_ttl_minutes: 240
+  image: sandbox-demo:1.0.0
+  app_port: 5000
+
+platform:
+  project_name: devops-sandbox
+  network: sandboxnet-platform
+  containers:
+    nginx: sandbox-nginx
+    api: sandbox-api
+    daemon: sandbox-daemon
+    monitor: sandbox-monitor
+  image:
+    api: devops-sandbox-api:latest
+
+network:
+  public_host: 0.0.0.0
+  public_port: 18080
+  api_port: 18081
+
+resources:
+  cpus: "1.0"
+  memory: 512m
+  memory_mb: 512
+  pids_limit: 256
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m
+  log_driver:
+    max_size: 10m
+    max_file: "3"
+
+paths:
+  envs: envs
+  logs: logs
+  nginx_conf_dir: nginx/conf.d
+
+validation:
+  env_name_regex: "^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$"
+  env_id_regex: "^env-[0-9a-f]{8}$"

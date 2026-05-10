@@ -1,0 +1,101 @@
+name: devops-sandbox
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+    image: devops-sandbox-api:latest
+    container_name: sandbox-api
+    pid: host
+    labels:
+      sandbox.role: api
+    env_file:
+      - .env
+    environment:
+      REPO_ROOT: /workspace
+    working_dir: /workspace
+    command: ["uvicorn", "api:app", "--app-dir", "/workspace/platform", "--host", "0.0.0.0", "--port", "18081"]
+    ports:
+      - "${API_PORT:-18081}:18081"
+    volumes:
+      - ./:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - platform
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:18081/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    restart: unless-stopped
+
+  daemon:
+    image: devops-sandbox-api:latest
+    container_name: sandbox-daemon
+    pid: host
+    labels:
+      sandbox.role: daemon
+    env_file:
+      - .env
+    working_dir: /workspace
+    command: ["bash", "platform/cleanup_daemon.sh"]
+    volumes:
+      - ./:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - platform
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  monitor:
+    image: devops-sandbox-api:latest
+    container_name: sandbox-monitor
+    pid: host
+    labels:
+      sandbox.role: monitor
+    env_file:
+      - .env
+    working_dir: /workspace
+    command: ["python", "monitor/health_poller.py"]
+    volumes:
+      - ./:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - platform
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: sandbox-nginx
+    labels:
+      sandbox.role: nginx
+    ports:
+      - "${INGRESS_PORT:-18080}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    networks:
+      - platform
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    restart: unless-stopped
+
+networks:
+  platform:
+    name: sandboxnet-platform
+    labels:
+      sandbox.role: platform

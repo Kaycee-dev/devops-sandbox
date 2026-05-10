@@ -1,9 +1,12 @@
 # Runtime state — brief requires these gitignored
 logs/
 envs/
+history.jsonl
+evidence/
 
 # Auto-generated per-env Nginx configs (only the dir is tracked)
 nginx/conf.d/*.conf
+nginx/conf.d/.broken/
 !nginx/conf.d/.gitkeep
 
 # Secrets

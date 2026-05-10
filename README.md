@@ -1,252 +1,167 @@
 # devops-sandbox
 
-> Self-service mini-Heroku with chaos engineering toggle. Spin up isolated, short-lived environments, deploy a demo app into each, simulate outages, monitor health, and tear it all down — automatically or on demand.
+Self-service DevOps sandbox platform for HNG14 Stage 5: create short-lived isolated Docker environments, route them through Nginx, stream logs by env ID, poll health, simulate outages, recover, and destroy everything manually or by TTL.
 
-**HNG14 DevOps Stage 5** · Author: _<your-name>_ · Demo video: _<drive-link>_
-
----
-
-## Table of Contents
-
-1. [Architecture](#architecture)
-2. [Prerequisites](#prerequisites)
-3. [Quick Start](#quick-start)
-4. [Full Demo Walkthrough](#full-demo-walkthrough)
-5. [Make Targets](#make-targets)
-6. [API Reference](#api-reference)
-7. [Network Approach](#network-approach)
-8. [Log Shipping Approach](#log-shipping-approach)
-9. [Configuration](#configuration)
-10. [Project Layout](#project-layout)
-11. [Known Limitations](#known-limitations)
-12. [Troubleshooting](#troubleshooting)
-
----
+Demo video: **pending Kelechi upload**
+Live server: **pending VM deployment**
 
 ## Architecture
 
+```text
+             host ports
+        18080        18081
+          |            |
+          v            v
+   +--------------+  +----------------+
+   | sandbox-nginx|  |  sandbox-api   |
+   | front door   |  | FastAPI wrapper|
+   +------+-------+  +--------+-------+
+          |                   |
+          | joins per-env     | shells out to platform/*.sh
+          | networks          |
+          v                   v
+ +-------------------+   +------------------+
+ | sandboxnet-env-*  |   | Docker Engine    |
+ | sandbox-*-app     |   | containers/nets  |
+ +-------------------+   +------------------+
+          ^
+          |
+ +--------+---------+     +-----------------+
+ | sandbox-monitor  |     | sandbox-daemon  |
+ | /health poller   |     | TTL cleanup     |
+ +------------------+     +-----------------+
 ```
-<paste contents of governance/templates/ARCHITECTURE_DIAGRAM.txt here,
-fenced as a code block so it renders monospaced>
-```
 
-**Components:**
-
-- **Nginx (`sandbox-nginx`)** — single front door on host port `18080`. Routes `/<env-name>/` to the matching per-env container by name.
-- **Control API (`sandbox-api`)** — FastAPI service on host port `18081`. Wraps `create_env.sh` / `destroy_env.sh` / `simulate_outage.sh`.
-- **Cleanup daemon (`sandbox-daemon`)** — runs `cleanup_daemon.sh` on a 60s loop, destroys expired envs.
-- **Health monitor (`sandbox-monitor`)** — `health_poller.py` polls each env's `/health` every 30s; flips status to `degraded` after 3 consecutive failures.
-- **Per-env app container (`sandbox-<env_id>-app`)** — the user's demo app, isolated on its own Docker network `sandboxnet-<env_id>`, joined to the platform network only via Nginx.
-
----
+Nginx is the public front door on `http://localhost:18080`. The API is also exposed directly on `http://localhost:18081/api/v1` and proxied at `http://localhost:18080/api/v1`.
 
 ## Prerequisites
 
-- Linux VM (tested on Ubuntu 22.04+) — _everything must run on a single Linux VM_
-- Docker Engine ≥ 24.x
-- Docker Compose v2 (the `docker compose` plugin, not the legacy `docker-compose`)
-- GNU Make
-- Bash 4+
-- Python 3.11+ (for local linting/dev only — the API and monitor run inside containers)
-- ~2 GB free disk, ~1 GB free RAM headroom
-
-> **Required user permission:** the user running `make up` must be in the `docker` group, OR `make` must be run with `sudo`.
-
----
+- Linux VM or WSL2 with Docker Engine access
+- Docker Engine 24+ and Docker Compose v2
+- GNU Make and Bash
+- Python 3 for local helper checks
+- At least 2 GiB free disk
+- Host ports `18080` and `18081` free
 
 ## Quick Start
 
-Zero to first running env in **5 commands**:
+From a fresh clone to a running env:
 
 ```bash
-# 1. Clone
-git clone https://github.com/<you>/devops-sandbox.git && cd devops-sandbox
-
-# 2. Configure
-cp .env.example .env   # then edit API_TOKEN if you want auth on
-
-# 3. Boot the platform
+cp .env.example .env && chmod 600 .env
 make up
-
-# 4. Create your first env (prompts for name + TTL)
-make create
-
-# 5. Open it
-curl http://localhost:18080/<the-name-you-just-typed>/
+make create NAME=demo TTL=5
+curl http://localhost:18080/demo/health
+make destroy ENV=<env-id-printed-by-create>
 ```
 
----
+If `.env` is missing, `make up` creates it from `.env.example`, fixes mode to `600`, and exits so you can review it before booting.
 
-## Full Demo Walkthrough
-
-This is the script the demo video follows. Every step is a single make target — no manual `docker run` invocations.
+## Demo Walkthrough
 
 ```bash
-# 0. Start the platform
 make up
-
-# 1. Create a sandbox env named "demo" with a 5-minute TTL
-make create     # type: demo, then 5
-
-# 2. Hit the deployed app through Nginx
+make create NAME=demo TTL=5
 curl http://localhost:18080/demo/
 curl http://localhost:18080/demo/health
-
-# 3. Inspect health history
 make health
-
-# 4. Tail recent app logs
-make logs ENV=env-<the-id-printed-by-step-1>
-
-# 5. Simulate a crash → watch the monitor flip status to degraded within ~90s
-make simulate ENV=env-<id> MODE=crash
+make logs ENV=<env-id>
+make simulate ENV=<env-id> MODE=crash
 sleep 95
-make health     # should now show: degraded
-
-# 6. Recover
-make simulate ENV=env-<id> MODE=recover
-sleep 35
-make health     # back to: running
-
-# 7. Wait for TTL to expire → daemon auto-destroys (or destroy manually)
-make destroy ENV=env-<id>
-
-# 8. Tear down the platform and wipe state
+make health
+make simulate ENV=<env-id> MODE=recover
+make destroy ENV=<env-id>
 make down
 make clean
 ```
 
----
+The API version of the same flow is covered by:
+
+```bash
+make test-api
+```
+
+The current Postman gate passes locally: 14 requests, 59 assertions, 0 failures.
 
 ## Make Targets
 
-| Target                     | Purpose                                                    |
-|----------------------------|------------------------------------------------------------|
-| `make up`                  | Start Nginx + daemon + API + monitor                       |
-| `make down`                | Stop everything; destroy every active env first            |
-| `make create`              | Prompt for `name` + `TTL`, then create a sandbox env       |
-| `make destroy ENV=<id>`    | Destroy a single env by ID                                 |
-| `make logs ENV=<id>`       | Tail `logs/<id>/app.log` (last 100 lines, then follow)     |
-| `make health`              | Print health status of every active env                    |
-| `make simulate ENV=<id> MODE=<mode>` | Run an outage simulation (`crash`/`pause`/`network`/`recover`/`stress`) |
-| `make clean`               | Wipe all state, logs, and archives — irrecoverable         |
-| `make test-api`            | Run the Postman collection via Newman against the live API |
+| Target | Purpose |
+|---|---|
+| `make up` | Preflight, build images, start Nginx, API, daemon, monitor |
+| `make down` | Destroy active envs where possible and stop platform containers |
+| `make create NAME=demo TTL=5` | Create or return an existing env by name |
+| `make destroy ENV=env-abc12345` | Destroy one env |
+| `make logs ENV=env-abc12345` | Tail `logs/<env>/app.log` |
+| `make health` | Print active env status |
+| `make simulate ENV=... MODE=crash` | Run outage simulation |
+| `make clean` | Remove runtime state/logs/generated env configs |
+| `make test-api` | Run the Postman collection with Newman |
+| `make ship-check` | Run local aggregate checks |
 
----
-
-## API Reference
+## API
 
 Base URL: `http://localhost:18081/api/v1`
 
-See [`docs/API.md`](docs/API.md) for the full contract. Quick reference:
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/envs` | Create env |
+| `GET` | `/envs` | List envs with TTL remaining |
+| `DELETE` | `/envs/{id}` | Destroy env |
+| `GET` | `/envs/{id}/logs` | Last 100 app log lines |
+| `GET` | `/envs/{id}/health` | Last 10 health checks |
+| `POST` | `/envs/{id}/outage` | `crash`, `pause`, `network`, `recover`, `stress` |
 
-| Method | Path                       | Purpose                              |
-|--------|----------------------------|--------------------------------------|
-| POST   | `/envs`                    | Create env                           |
-| GET    | `/envs`                    | List active envs + TTL remaining     |
-| DELETE | `/envs/{id}`               | Destroy env                          |
-| GET    | `/envs/{id}/logs`          | Last 100 lines of `app.log`          |
-| GET    | `/envs/{id}/health`        | Last 10 health-check results         |
-| POST   | `/envs/{id}/outage`        | Trigger outage simulation            |
-
-Auth (optional): `X-API-Token: <value of API_TOKEN in .env>`. If `API_TOKEN` is unset, the API runs open.
-
----
+If `API_TOKEN` is set in `.env`, requests must include `X-API-Token: <token>`. Local development can leave it blank.
 
 ## Network Approach
 
-Every env gets its own Docker bridge network: `sandboxnet-<env_id>`. The app container is **only** on that per-env network — it cannot see other envs, the daemon, the monitor, or the API.
+Each environment gets a dedicated Docker bridge network named `sandboxnet-<env_id>`. The app container is named `sandbox-<env_id>-app` and does not bind host ports. `sandbox-nginx` is connected to each env network at create time and disconnected on destroy.
 
-The Nginx container is multi-homed: it sits on `sandboxnet-platform` (where it talks to the API) and is **dynamically joined** to each `sandboxnet-<env_id>` at create-time via `docker network connect`, then disconnected at destroy-time. This is what lets one Nginx process route to N isolated envs without putting everything on one flat network.
+Generated route files live at `nginx/conf.d/<env_id>.conf`. They are path-based snippets included inside the main Nginx server so both URLs work:
 
-The control API also mounts `/var/run/docker.sock` (read-write) so it can shell out to `docker` and the lifecycle scripts. Risks and mitigations are documented in `docs/THREAT_MODEL.md`.
+- `http://localhost:18080/<env_id>/`
+- `http://localhost:18080/<name>/`
 
----
+Every write/delete of a generated Nginx route runs `docker exec sandbox-nginx nginx -t` before reload.
 
-## Log Shipping Approach
+## Log Shipping
 
-**Approach A (chosen).** When `create_env.sh` starts the app container, it forks `docker logs -f <container_id> >> logs/<env_id>/app.log` as a background process and stores its PID in the state file's `bg_pids.log_shipper` field. `destroy_env.sh` reads that PID, sends `SIGTERM`, waits up to 5s, then `SIGKILL` if needed — preventing zombie processes (Pitfall #3 from the brief).
+Approach A is implemented. `create_env.sh` starts:
 
-The trade-off vs Approach B (Loki/Fluentd): less resilient to API restarts, but zero extra containers and zero extra ports. Acceptable for a stage 5 sandbox.
-
----
-
-## Configuration
-
-All config lives in `.env` (gitignored). See `.env.example` for the full list. Highlights:
-
-| Variable           | Default       | Purpose                                          |
-|--------------------|---------------|--------------------------------------------------|
-| `API_TOKEN`        | _unset_       | If set, required as `X-API-Token` on every call  |
-| `DEFAULT_TTL_MIN`  | `30`          | TTL when caller doesn't specify                  |
-| `MAX_TTL_MIN`      | `240`         | Hard ceiling                                     |
-| `INGRESS_PORT`     | `18080`       | Public Nginx port on the host                    |
-| `API_PORT`         | `18081`       | Control API port on the host                     |
-| `HEALTH_INTERVAL_S`| `30`          | Health poll cadence                              |
-| `CLEANUP_INTERVAL_S`| `60`         | Daemon loop cadence                              |
-
----
-
-## Project Layout
-
-```
-devops-sandbox/
-├── platform/
-│   ├── create_env.sh
-│   ├── destroy_env.sh
-│   ├── cleanup_daemon.sh
-│   ├── simulate_outage.sh
-│   ├── api.py
-│   └── lib/             # shared bash helpers (atomic_write, log_event, …)
-├── nginx/
-│   ├── nginx.conf
-│   └── conf.d/          # per-env <env_id>.conf — auto-generated, gitignored
-├── monitor/
-│   └── health_poller.py
-├── demo-app/            # the throwaway Flask "Hello World" deployed into each env
-│   ├── Dockerfile
-│   └── app.py
-├── docs/
-│   ├── API.md
-│   └── THREAT_MODEL.md
-├── journal/             # live journal entries — feed into the blog post
-├── policies/            # OPA Rego policies
-├── postman/
-├── logs/                # gitignored
-├── envs/                # runtime state files — gitignored
-├── docker-compose.yml
-├── Makefile
-├── .env.example
-├── .gitignore
-└── README.md
+```bash
+nohup docker logs -f <container_id> >> logs/<env_id>/app.log 2>&1 &
 ```
 
----
+The PID is stored in the state file as:
+
+```json
+{ "bg_pids": { "log_shipper": 12345 } }
+```
+
+`destroy_env.sh` terminates that PID before removing the container and archives logs under `logs/archived/<env_id>/<UTC timestamp>/`.
+
+## State and Health
+
+Runtime state lives in `envs/<env_id>.json` and is always written via temp file, `fsync`, and rename. The monitor polls each active env through Nginx every 30 seconds and appends:
+
+```text
+<UTC ISO timestamp> <http_status> <latency_ms>
+```
+
+After three consecutive failures, the monitor marks the env `degraded`.
 
 ## Known Limitations
 
-- Single-VM only; no clustering. Nginx, the daemon, the API, and every env share one host.
-- TTLs use wall-clock UTC; if the system clock jumps backwards, premature destruction is possible (acceptable trade-off — see journal entry on this).
-- No persistent volumes inside envs; redeploy = data loss. By design — these are sandboxes.
-- API auth is a single shared token. No per-user identity, no RBAC. Adequate for a sandbox; would not be in production.
-- Demo app is a stub. Swap it for your own image by editing `demo-app/Dockerfile`.
+- Single-host only; no clustering or remote Docker contexts.
+- The API uses the Docker socket and runs with enough privilege to operate containers.
+- OPA policy files are present, but the API mirrors their outage rules rather than requiring an `opa` binary.
+- The demo video link and live VM URL are pending external upload/deployment.
+- `stress` mode uses a short Python CPU loop inside the demo container, not `stress-ng`.
 
----
+## Changelog
 
-## Troubleshooting
-
-**`make up` fails with "permission denied" on `/var/run/docker.sock`.**
-Add your user to the `docker` group: `sudo usermod -aG docker $USER`, then log out and back in.
-
-**Nginx returns 502 a few seconds after `make create`.**
-The app container is still booting. Wait ~5s and retry. Nginx itself is fine.
-
-**Env stuck in `degraded` after `recover`.**
-The monitor needs one successful poll to clear the failure counter. Wait ~35s and re-check `make health`.
-
-**`make destroy` says "env not found" but state file exists.**
-You probably edited `envs/<id>.json` by hand. Don't — run `destroy_env.sh` directly with `--force` to clean up.
-
----
-
-_Built for HNG14 DevOps Stage 5. Governance pack: see `governance/`. Live build journal: see `journal/`._
+- `journal/2026-05-10-01-skeleton-and-demo-app.md`
+- `journal/2026-05-10-02-lifecycle.md`
+- `journal/2026-05-10-03-daemon-monitor.md`
+- `journal/2026-05-10-04-api-outage.md`
+- `journal/2026-05-10-05-polish-ship.md`

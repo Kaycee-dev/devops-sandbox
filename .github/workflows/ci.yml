@@ -128,16 +128,19 @@ jobs:
           cp .env.example .env
           # CI runs with a fixed token so the Postman pack can hit the API.
           echo "API_TOKEN=ci-test-token-do-not-reuse" >> .env
+          chmod 600 .env
 
       - name: Build platform images
         run: docker compose build --pull
 
       - name: Boot platform
+        env:
+          API_TOKEN: ci-test-token-do-not-reuse
         run: |
           make up
           # wait up to 30s for the API to be reachable
           for i in $(seq 1 30); do
-              if curl -sf http://localhost:18081/api/v1/envs >/dev/null 2>&1; then
+              if curl -sf -H "X-API-Token: ${API_TOKEN}" http://localhost:18081/api/v1/envs >/dev/null 2>&1; then
                   echo "API up after ${i}s"
                   break
               fi

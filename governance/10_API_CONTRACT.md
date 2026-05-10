@@ -60,7 +60,9 @@ Documented machine codes:
     "sandbox.role": "app",
     "sandbox.created_at": "2026-05-09T13:42:08Z"
   },
-  "bg_pids": [],
+  "bg_pids": {
+    "log_shipper": 12345
+  },
   "last_outage": null
 }
 ```
