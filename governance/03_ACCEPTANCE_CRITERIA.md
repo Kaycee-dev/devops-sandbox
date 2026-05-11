@@ -63,7 +63,7 @@ The matrix is sectioned by source: **Explicit** rows come straight from `CURRENT
 | A53 | Quick-start ≤ 5 commands from zero to running env | `README.md` | — | manual replay on a fresh VM | …05-ship | ☑ |
 | A54 | Full demo walkthrough in README | `README.md` | — | — | …05-ship | ☑ |
 | A55 | Known limitations in README | `README.md` | — | — | …05-ship | ☑ |
-| A56 | All secrets in `.env`, never committed | `.gitignore` + `.env.example` | — | gitleaks pass | journal/2026-05-09-01-bootstrap | ☑ |
+| A56 | All secrets in `.env`, never committed | `.gitignore` + `.env.example` | — | gitleaks pass | journal/2026-05-09-01-bootstrap, journal/2026-05-11-08-local-cleanup | ☑ |
 | A57 | 3-minute walkthrough video uploaded, link in README | (external, in README) | — | — | …05-ship | ☐ |
 | A58 | Server live at grading time | GCP VM `sandbox-vm` | — | Newman against `http://34.77.247.217:18081` | journal/2026-05-10-07-readme-live-submission | ☑ |
 

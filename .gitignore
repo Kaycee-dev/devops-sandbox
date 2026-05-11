@@ -33,5 +33,11 @@ Thumbs.db
 *.tmp
 *.bak
 
-# Already extracted
-governance-pack.zip
+# Local/downloaded archives
+*.zip
+
+# Windows download metadata sidecars
+*:Zone.Identifier
+
+# Local prompt scratch files
+*_PROMPT.md
