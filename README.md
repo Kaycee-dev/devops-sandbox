@@ -178,6 +178,10 @@ After three consecutive failures, the monitor marks the env `degraded`.
 - Sandbox environments are intentionally short-lived; recreate named live smoke routes if their TTL has expired.
 - `stress` mode uses a short Python CPU loop inside the demo container, not `stress-ng`.
 
+## Interview Prep
+
+- [Stage 5 interview prep pack](docs/interview-prep-pack.md)
+
 ## Changelog
 
 - `journal/2026-05-10-01-skeleton-and-demo-app.md`
@@ -187,3 +191,4 @@ After three consecutive failures, the monitor marks the env `degraded`.
 - `journal/2026-05-10-05-polish-ship.md`
 - `journal/2026-05-10-06-ci-repair.md`
 - `journal/2026-05-10-07-readme-live-submission.md`
+- `journal/2026-05-11-09-interview-prep.md`
