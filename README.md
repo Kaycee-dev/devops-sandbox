@@ -113,7 +113,7 @@ curl -fsS http://34.77.247.217:18080/readme-live/health
 | `make logs ENV=env-abc12345` | Tail `logs/<env>/app.log` |
 | `make health` | Print active env status |
 | `make simulate ENV=... MODE=crash` | Run outage simulation |
-| `make clean` | Remove runtime state/logs/generated env configs |
+| `make clean` | Remove runtime state/logs/generated env configs, including Docker-owned archives |
 | `make test-api` | Run the Postman collection with Newman |
 | `make ship-check` | Run local aggregate checks |
 
@@ -192,3 +192,4 @@ After three consecutive failures, the monitor marks the env `degraded`.
 - `journal/2026-05-10-06-ci-repair.md`
 - `journal/2026-05-10-07-readme-live-submission.md`
 - `journal/2026-05-11-09-interview-prep.md`
+- `journal/2026-05-12-01-clean-permission-repair.md`

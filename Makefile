@@ -23,7 +23,7 @@ help:
 	printf '%s\n' "  make logs ENV=env-abc12345      Tail app logs"
 	printf '%s\n' "  make health                     Show health status"
 	printf '%s\n' "  make simulate ENV=... MODE=...  Run outage simulation"
-	printf '%s\n' "  make clean                      Wipe runtime state and generated logs"
+	printf '%s\n' "  make clean                      Wipe runtime state and generated logs, including Docker-owned archives"
 	printf '%s\n' "  make test-api                   Run the Postman API suite"
 
 up:
@@ -143,9 +143,47 @@ simulate:
 	fi
 
 clean: down
-	find envs -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
-	find logs -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
-	find nginx/conf.d -mindepth 1 ! -name .gitkeep ! -name .broken -exec rm -rf {} +
+	clean_runtime() {
+	    find envs -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
+	    find logs -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
+	    find nginx/conf.d -mindepth 1 ! -name .gitkeep ! -name .broken -exec rm -rf {} +
+	}
+	runtime_leftovers() {
+	    find envs -mindepth 1 ! -name .gitkeep -print
+	    find logs -mindepth 1 ! -name .gitkeep ! -path logs/archived -print
+	    find nginx/conf.d -mindepth 1 ! -name .gitkeep ! -name .broken -print
+	}
+	clean_as_root_container() {
+	    docker run --rm \
+	        -e "HOST_UID=$$(id -u)" \
+	        -e "HOST_GID=$$(id -g)" \
+	        -v "$$(pwd):/workspace" \
+	        -w /workspace \
+	        --entrypoint sh \
+	        nginx:1.27-alpine \
+	        -c 'set -eu; \
+	            find envs -mindepth 1 ! -name .gitkeep -exec rm -rf {} +; \
+	            find logs -mindepth 1 ! -name .gitkeep -exec rm -rf {} +; \
+	            find nginx/conf.d -mindepth 1 ! -name .gitkeep ! -name .broken -exec rm -rf {} +; \
+	            mkdir -p logs/archived nginx/conf.d/.broken; \
+	            chown -R "$$HOST_UID:$$HOST_GID" envs logs nginx/conf.d'
+	}
+	clean_err="$$(mktemp)"
+	if ! clean_runtime 2>"$$clean_err" || runtime_leftovers | grep -q .; then
+	    if ! clean_as_root_container; then
+	        cat "$$clean_err" >&2
+	        rm -f "$$clean_err"
+	        printf '%s\n' "ERROR: make clean could not remove runtime files with host user or Docker fallback" >&2
+	        exit 1
+	    fi
+	fi
+	if runtime_leftovers | grep -q .; then
+	    runtime_leftovers >&2
+	    rm -f "$$clean_err"
+	    printf '%s\n' "ERROR: make clean left runtime files behind" >&2
+	    exit 1
+	fi
+	rm -f "$$clean_err"
 	mkdir -p logs/archived nginx/conf.d/.broken
 
 test-api:

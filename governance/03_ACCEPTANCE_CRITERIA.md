@@ -57,7 +57,7 @@ The matrix is sectioned by source: **Explicit** rows come straight from `CURRENT
 | A47 | `make logs ENV=…` tails env logs | `Makefile` | — | manual smoke | …03-daemon | ☑ |
 | A48 | `make health` shows all env health statuses | `Makefile` | — | manual smoke | …03-daemon | ☑ |
 | A49 | `make simulate ENV=… MODE=…` runs outage sim | `Makefile` | — | bats | …04-outage | ☑ |
-| A50 | `make clean` wipes state, logs, archives | `Makefile` | — | bats: dirs empty post-run | …05-ship | ☑ |
+| A50 | `make clean` wipes state, logs, archives | `Makefile` | — | bats: dirs empty post-run; root-owned archive regression smoke | …05-ship, journal/2026-05-12-01-clean-permission-repair | ☑ |
 | A51 | README architecture diagram (ASCII or PNG) | `README.md` | — | — | …05-ship | ☑ |
 | A52 | README prerequisites listed | `README.md` | — | — | …05-ship | ☑ |
 | A53 | Quick-start ≤ 5 commands from zero to running env | `README.md` | — | manual replay on a fresh VM | …05-ship | ☑ |
